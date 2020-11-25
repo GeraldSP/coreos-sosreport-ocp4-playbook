@@ -1,0 +1,94 @@
+---
+# sosreport runner/fetcher
+# usage:
+#  ansible-playbook  -i inventory gather-sosreport.yaml limit=<node/nodes> -e "dest=~/temp name=<name> case_id=<case/ticket>"
+
+- hosts: all
+  gather_facts: false
+
+  vars:
+    sos_path: "{{ dest }}/{{ case_id }}/{{ run_time }}"
+
+  tasks:
+    - name: Set run_time
+      set_fact: run_time="{{lookup('pipe','date -u +%Y%m%d%H%M%S')}}"
+      run_once: true
+
+    - name: Create destination dir
+      local_action:
+        module: file
+        path: "{{ sos_path }}"
+        state: directory
+      run_once: true
+
+
+    - name: Prepare toolbox custom
+      raw: '{{ item }}'
+      become: true
+      ignore_errors: true
+      with_items:
+        - 'podman stop toolbox-root-custom'
+        - 'podman rm toolbox-root-custom'
+        - 'podman run -d --name toolbox-root-custom --authfile /var/lib/kubelet/config.json --privileged --ipc=host --net=host --pid=host -e HOST=/host -e NAME=toolbox-root -e IMAGE=registry.redhat.io/rhel8/support-tools:latest -v /run:/run -v /var/log:/var/log -v /etc/machine-id:/etc/machine-id -v /etc/localtime:/etc/localtime -v /:/host registry.redhat.io/rhel8/support-tools:latest sleep 9000'
+
+    - set_fact: toolbox_instance=toolbox-root-custom
+
+    - name: Run sosreport
+      shell: podman exec -ti {{ toolbox_instance }} sosreport -a --case-id={{ case_id }} --batch | awk '/sosreport-/ {print $1}'
+      register: sosreport_file
+      become: true
+
+    - name: Copy sosreport file from container to host
+      shell: podman cp {{ item }}
+      become: true
+      with_items:
+        - '{{ toolbox_instance }}:{{ sosreport_file.stdout }} /tmp/{{ sosreport_file.stdout | basename }}'
+        - '{{ toolbox_instance }}:{{ sosreport_file.stdout }} /tmp/{{ sosreport_file.stdout | basename }}.md5'
+
+    - name: Shutdown toolbox
+      shell: podman stop {{ toolbox_instance }}
+      become: true
+
+    - name: Chown sosreport
+      file:
+        path: '{{ item }}'
+        mode: 0777
+      with_items:
+        - '/tmp/{{ sosreport_file.stdout | basename }}'
+        - '/tmp/{{ sosreport_file.stdout | basename }}.md5'
+      become: true
+
+    - name: Copy files
+      fetch:
+        src: '/tmp/{{ sosreport_file.stdout | basename }}'
+        dest: '{{ sos_path }}/{{ inventory_hostname }}/'
+        flat: yes
+      register: copy_result
+
+    - name: Clean tmp
+      file:
+        path: '{{ item }}'
+        state: absent
+      with_items:
+        - '/tmp/{{ sosreport_file.stdout | basename }}'
+        - '/tmp/{{ sosreport_file.stdout | basename }}.md5'
+      become: true
+
+    - name: Create tarball
+      local_action:
+        module: archive
+        path: '{{ sos_path }}'
+        dest: '{{ dest }}/{{ case_id }}/sosreports-{{ case_id }}_{{ run_time }}.tgz'
+      run_once: true
+      register: archive_result
+
+    - name: Clean local reports
+      local_action:
+        module: file
+        path: '{{ sos_path }}'
+        state: absent
+      run_once: true
+
+    - debug:
+        msg: "sosreport archive: {{ dest }}/{{ case_id }}/sosreports-{{ case_id }}_{{ run_time }}.tgz"
+      run_once: true
