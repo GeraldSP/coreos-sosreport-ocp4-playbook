@@ -1,0 +1,1 @@
+# coreos-sosreport-ocp4-playbook
