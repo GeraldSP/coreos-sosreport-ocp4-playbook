@@ -1,5 +1,10 @@
 # coreos-sosreport-ocp4-playbook
 
+
+This repos is based on the following contribution:
+
+https://gist.github.com/blemmenes/1ec380a1e214a38d5aa69db30e83ab71
+
 ## Prepare
 Clone this repo, 
 Fill up the inventory file with openshift hosts, beware of ssh key based authentication, please configure your ansible inventory acordingly. 
